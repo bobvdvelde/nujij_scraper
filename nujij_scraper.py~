@@ -1,0 +1,4 @@
+import requests
+from lxml.html import fromstring
+
+BASE_URL = "http://www.nujij.nl/Default.lynkx?pageStart={num}"
