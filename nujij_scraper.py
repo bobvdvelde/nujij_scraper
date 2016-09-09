@@ -5,6 +5,7 @@ from pprint import pprint
 import re
 import json
 import os
+import time 
 
 logging.basicConfig(format='%(levelname)s-%(asctime)s:%(message)s')
 logger = logging.getLogger(__name__)
@@ -14,13 +15,14 @@ BASE_URL = "http://www.nujij.nl/Default.lynkx?pageStart="
 DOMAIN   = "http://www.nujij.nl/"
 
 OUTPUT_FOLDER = 'json'
+RETRIES = 10
 
 if not OUTPUT_FOLDER in os.listdir('.'):
     os.mkdir(OUTPUT_FOLDER)
 
 session = requests.Session()
 
-first_or_non = lambda x: len(x) > 0 and x[0] or ''
+first_or_non = lambda x, y=0: len(x) > y and x[y] or ''
 parse_markup_url = lambda x: x.xplit("'")[1]
 good_url = lambda x : x.replace('//','http://',1)
 
@@ -37,20 +39,26 @@ def extract_TW(element):
         return ''
         
 def get_overview(pagenum=0):
+    session = requests.Session()
     url = BASE_URL+'%s' %pagenum
+    with open('last','w') as f:
+        f.write('%s' %pagenum)
     logger.info("at page {url}".format(**locals()))
     page = session.get(url, timeout=60)
     dom  = fromstring(page.content)
     berichten = dom.xpath("//*[@class='columnLeft']//*[@class='bericht']")
     for bericht in berichten:
-        if good_url(first_or_non(bericht.xpath(".//*[@class='title']/*/@href"))).split('.')[-2] in os.listdir(OUTPUT_FOLDER):
-            logger.info("message already recovered, skipping")
+        message_url = good_url(first_or_non(bericht.xpath(".//*[@class='title']/*/@href")))
+        message_id  = message_url.split('.')[-2]
+        if message_id in os.listdir(OUTPUT_FOLDER):
+            logger.info("message already recovered, skipping {message_id} [{message_url}]".format(**locals()))
             continue
         bericht = get_item(bericht)
         with open(os.path.join(OUTPUT_FOLDER, bericht['id']),'w') as f:
             json.dump(bericht, f)
     if berichten:
         get_overview(pagenum+20)
+        session = requests.Session()
     logger.info("Finished collecting pages")
 
 def get_item(bericht_element):
@@ -107,8 +115,8 @@ def get_comments(bericht_page):
             'pos' : first_or_non( element.xpath('.//*[@class="reactie-nummer"]//text()') ),
             'by_user' : first_or_non( element.xpath('.//div/strong//text()') ),
             'timestamp_string' : first_or_non( element.xpath('.//*[@class="tijdsverschil"]/@publicationdate') ),
-            'upvote_string' : element.xpath('.//*[@class="reactie-saldo"]//text()')[1],
-            'downvote_string' : element.xpath('.//*[@class="reactie-saldo"]//text()')[0],
+            'upvote_string' : first_or_non(element.xpath('.//*[@class="reactie-saldo"]//text()'),1),
+            'downvote_string' : first_or_non(element.xpath('.//*[@class="reactie-saldo"]//text()'),0),
             'text' : ' '.join(element.xpath('.//div[@class="reactie-body "]/text()')),
             'raw'  : str(tostring(element)),
             'reply_to_strings' : [str(reply_str) for reply_str in element.xpath('.//div[@class="reactie-body "]//span//text()')],
@@ -137,4 +145,18 @@ def get_voters(bericht_page):
     return voters
 
 if __name__ == '__main__':
-    get_overview()
+    try: last = int(open('last','r').read())
+    except:
+        logger.warn("last file not found or corrupt, starting at page 0")
+        last = 0
+    logger.info('starting at {last}'.format(**locals()))
+    while RETRIES:
+        try: get_overview(last)
+        except KeyboardInterrupt:
+            logger.info("stopping retrieval")
+            break
+        except Exception as e:
+            RETRIES -= 1
+            logger.warn('Exception! {e}'.format(**locals()))
+            if not RETRIES:
+                raise e
