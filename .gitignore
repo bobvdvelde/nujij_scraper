@@ -3,3 +3,5 @@ json.zip
 jsons.zip
 *.zip
 last
+*~ 
+*#
